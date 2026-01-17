@@ -1,0 +1,455 @@
+# Flutter Project Rules - useful_pavlok
+
+## 技術スタック
+
+### 必須技術
+- **Flutter**: Stableチャンネルのみを使用
+- **状態管理**: Riverpodを必須として使用（ProviderやsetStateは使用禁止）
+- **ローカル保存**: HiveまたはSQLiteを使用（shared_preferencesは一時的な設定のみ）
+
+### 推奨パッケージ
+- `flutter_riverpod`: 状態管理
+- `riverpod_annotation`: コード生成による型安全な状態管理
+- `hive` / `hive_flutter`: ローカルデータベース（推奨）
+- `sqflite`: SQLite実装（必要に応じて）
+- `freezed`: イミュータブルなデータクラス
+- `json_annotation`: JSONシリアライゼーション
+
+## アーキテクチャ
+
+### Clean Architectureの原則
+プロジェクトは以下のレイヤー構造に従うこと：
+
+```
+lib/
+├── core/              # 共通ユーティリティ、定数、エラー定義
+│   ├── constants/
+│   ├── errors/
+│   ├── utils/
+│   └── extensions/
+├── data/              # データ層
+│   ├── datasources/   # ローカル/リモートデータソース
+│   ├── models/        # データモデル
+│   └── repositories/  # リポジトリ実装
+├── domain/            # ドメイン層
+│   ├── entities/      # エンティティ
+│   ├── repositories/  # リポジトリインターフェース
+│   └── usecases/      # ユースケース
+├── presentation/      # プレゼンテーション層
+│   ├── providers/     # Riverpodプロバイダー
+│   ├── pages/         # ページウィジェット
+│   ├── widgets/       # 再利用可能なウィジェット
+│   └── theme/         # テーマ設定
+└── main.dart
+```
+
+### レイヤー間の依存関係
+- **presentation** → **domain** → **data**
+- 上位レイヤーは下位レイヤーに依存可能、逆は禁止
+- UI層は直接データ層にアクセスしない
+
+## コーディングスタイル
+
+### 関数型コンポーネントの優先
+- **StatelessWidget**を優先的に使用
+- StatefulWidgetは最小限に（Riverpodで状態管理するため）
+- 関数型ウィジェット（`Widget Function(BuildContext)`）を積極的に使用
+
+```dart
+// ✅ Good: 関数型コンポーネント
+Widget buildUserCard(User user) {
+  return Card(
+    child: ListTile(
+      title: Text(user.name),
+    ),
+  );
+}
+
+// ❌ Bad: 不要なStatefulWidget
+class UserCard extends StatefulWidget { ... }
+```
+
+### ビジネスロジックの分離
+- UI層にビジネスロジックを書かない
+- すべてのロジックは`usecases`または`providers`に配置
+- Widgetは表示とユーザー入力の受け取りのみ
+
+```dart
+// ✅ Good: ロジックをProviderに分離
+@riverpod
+class UserNotifier extends _$UserNotifier {
+  @override
+  Future<User> build() async {
+    return ref.read(userRepositoryProvider).getUser();
+  }
+  
+  Future<void> updateUser(User user) async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() async {
+      return ref.read(userRepositoryProvider).updateUser(user);
+    });
+  }
+}
+
+// ❌ Bad: Widget内にロジック
+class UserPage extends StatelessWidget {
+  void _updateUser() {
+    // ビジネスロジックをここに書かない
+  }
+}
+```
+
+## エラーハンドリング
+
+### Pavlok連携（Bluetooth/API）の必須要件
+Pavlokデバイスとの通信（Bluetooth/API）に関しては、以下のエラーハンドリングを必須とする：
+
+1. **エラーダイアログの表示**
+   - すべてのエラーはユーザーに分かりやすいメッセージで表示
+   - 技術的なエラーメッセージはログに記録し、ユーザーには一般化したメッセージを表示
+
+2. **再試行ロジック**
+   - ネットワークエラー、タイムアウト、Bluetooth接続エラーには自動再試行を実装
+   - 最大再試行回数を設定（デフォルト3回）
+   - 指数バックオフによる再試行間隔
+
+```dart
+// ✅ Good: Pavlok連携のエラーハンドリング例
+class PavlokService {
+  Future<void> connectDevice({
+    int maxRetries = 3,
+    Duration initialDelay = const Duration(seconds: 1),
+  }) async {
+    int attempt = 0;
+    Duration delay = initialDelay;
+    
+    while (attempt < maxRetries) {
+      try {
+        await _bluetooth.connect();
+        return;
+      } on BluetoothException catch (e) {
+        attempt++;
+        if (attempt >= maxRetries) {
+          throw PavlokConnectionException(
+            message: 'デバイスへの接続に失敗しました。',
+            originalError: e,
+          );
+        }
+        await Future.delayed(delay);
+        delay = delay * 2; // 指数バックオフ
+      }
+    }
+  }
+  
+  Future<void> showErrorDialog(BuildContext context, Exception error) async {
+    final message = error is PavlokException
+        ? error.userMessage
+        : 'エラーが発生しました。もう一度お試しください。';
+    
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('エラー'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              // 再試行ロジックを呼び出す
+            },
+            child: const Text('再試行'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+```
+
+### 一般的なエラーハンドリング
+- `try-catch`でエラーを捕捉し、適切に処理
+- `Result`型または`Either`型の使用を推奨
+- AsyncValueを使用してローディング/エラー状態を管理
+
+```dart
+// ✅ Good: AsyncValueを使用したエラーハンドリング
+@riverpod
+class DataNotifier extends _$DataNotifier {
+  @override
+  Future<Data> build() async {
+    return ref.read(dataRepositoryProvider).fetchData();
+  }
+}
+
+// UI側
+Widget build(BuildContext context, WidgetRef ref) {
+  final dataAsync = ref.watch(dataNotifierProvider);
+  
+  return dataAsync.when(
+    data: (data) => DataView(data: data),
+    loading: () => const CircularProgressIndicator(),
+    error: (error, stack) => ErrorView(
+      error: error,
+      onRetry: () => ref.refresh(dataNotifierProvider),
+    ),
+  );
+}
+```
+
+## 禁止事項
+
+### any型の使用禁止
+- Dartには`dynamic`型があるが、使用を最小限に
+- 型推論を活用し、明示的な型指定を優先
+- `Object?`を使用する場合は、適切な型チェックを実装
+
+```dart
+// ❌ Bad: dynamic型の使用
+dynamic data = json.decode(response);
+String name = data['name']; // 型安全性がない
+
+// ✅ Good: 型安全な実装
+class UserModel {
+  final String name;
+  UserModel.fromJson(Map<String, dynamic> json) : name = json['name'] as String;
+}
+```
+
+### ハードコーディングの禁止
+- 文字列リテラルは定数ファイルに配置
+- マジックナンバーは定数として定義
+- APIエンドポイント、設定値は環境変数または設定ファイルから読み込む
+
+```dart
+// ❌ Bad: ハードコーディング
+Text('ユーザー名')
+ElevatedButton(onPressed: () {}, child: Text('送信'))
+final apiUrl = 'https://api.example.com/v1';
+
+// ✅ Good: 定数ファイルに配置
+// lib/core/constants/app_strings.dart
+class AppStrings {
+  static const userName = 'ユーザー名';
+  static const submit = '送信';
+}
+
+// lib/core/constants/api_endpoints.dart
+class ApiEndpoints {
+  static const baseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: 'https://api.example.com');
+  static const v1 = '$baseUrl/v1';
+}
+```
+
+## Riverpodの使用規則
+
+### プロバイダーの命名規則
+- `*Provider`: 通常のプロバイダー
+- `*Notifier`: 状態変更可能なNotifierProvider
+- `*FutureProvider`: Futureを返すプロバイダー
+- `*StreamProvider`: Streamを返すプロバイダー
+
+### プロバイダーの配置
+- すべてのプロバイダーは`presentation/providers/`に配置
+- 関連するプロバイダーは同じファイルにまとめる
+- ファイル名は`*_provider.dart`とする
+
+```dart
+// ✅ Good: プロバイダーの実装例
+@riverpod
+class UserNotifier extends _$UserNotifier {
+  @override
+  Future<User> build() async {
+    return ref.read(userRepositoryProvider).getUser();
+  }
+  
+  Future<void> updateUser(User user) async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() async {
+      return ref.read(userRepositoryProvider).updateUser(user);
+    });
+  }
+}
+```
+
+## ローカル保存の規則
+
+### Hiveの使用（推奨）
+- モデルクラスは`@HiveType`アノテーションを使用
+- TypeAdapterを実装して型安全な保存を実現
+- リポジトリパターンでデータアクセスを抽象化
+
+```dart
+// ✅ Good: Hiveモデルの実装例
+@HiveType(typeId: 0)
+class UserModel extends HiveObject {
+  @HiveField(0)
+  final String id;
+  
+  @HiveField(1)
+  final String name;
+  
+  UserModel({required this.id, required this.name});
+}
+```
+
+### SQLiteの使用（必要に応じて）
+- `sqflite`を使用する場合は、マイグレーション管理を実装
+- データベースヘルパークラスを作成してアクセスを管理
+
+## テスト
+
+### テストの作成
+- すべてのユースケースとリポジトリにテストを作成
+- Widgetテストは重要なUIコンポーネントに対して作成
+- モックを使用して外部依存を分離
+
+### テストファイルの配置
+- ユニットテスト: `test/unit/`
+- Widgetテスト: `test/widget/`
+- 統合テスト: `integration_test/`
+
+## コメントとドキュメント
+
+### ドキュメントコメント
+- 公開APIには`///`でドキュメントコメントを記述
+- 複雑なロジックには説明コメントを追加
+
+```dart
+/// Pavlokデバイスとの接続を管理するサービス
+/// 
+/// Bluetooth接続の確立、データの送受信、エラーハンドリングを担当します。
+class PavlokService {
+  /// デバイスに接続します
+  /// 
+  /// [deviceId] 接続するデバイスのID
+  /// [maxRetries] 最大再試行回数（デフォルト: 3）
+  /// 
+  /// Throws [PavlokConnectionException] 接続に失敗した場合
+  Future<void> connect(String deviceId, {int maxRetries = 3}) async {
+    // ...
+  }
+}
+```
+
+## デザイン・カラーガイドライン
+
+### 配色ルール
+アプリ全体で統一されたデザインを維持するため、以下の配色を厳守すること：
+
+1. **背景色**
+   - 原則として白（`Colors.white`）を使用
+   - `scaffoldBackgroundColor`は常に`Colors.white`
+
+2. **メインカラー（差し色）**
+   - 習慣の色やボタンのアクセントとして使用
+   - `Color(0xFF4A90E2)`（青）を使用
+   - テーマの`primaryColor`として定義
+
+3. **プライマリ・ダーク**
+   - ヘッダーや主要なテキストに使用
+   - `Color(0xFF333333)`（濃いグレー）を使用
+   - AppBarの背景色として使用
+
+4. **セカンダリ・ライト**
+   - 補助的なテキスト、日付ラベル、ボーダーに使用
+   - `Color(0xFF9E9E9E)`（薄いグレー）を使用
+   - 仕切り線（Divider）にも使用
+
+### 形状ルール
+- カードやグリッドは「丸みを帯びた四角（Rounded Rectangle）」で統一
+- `BorderRadius.circular(8)`を標準として使用（必要に応じて調整可）
+- カードの角丸は統一感を保つため、同じ値を使用
+
+### テーマの適用
+- すべての画面は`ThemeData`を参照し、個別に色をハードコーディングしない
+- `lib/presentation/theme/theme_data.dart`で一元管理
+- `main.dart`の`MaterialApp`でテーマを適用
+
+```dart
+// ✅ Good: ThemeDataを使用
+Scaffold(
+  backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+  appBar: AppBar(
+    backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
+    title: Text(
+      'タイトル',
+      style: Theme.of(context).textTheme.titleLarge,
+    ),
+  ),
+)
+
+// ❌ Bad: ハードコーディング
+Scaffold(
+  backgroundColor: Colors.white,
+  appBar: AppBar(
+    backgroundColor: Colors.grey.shade800,
+    title: Text(
+      'タイトル',
+      style: TextStyle(color: Colors.white),
+    ),
+  ),
+)
+```
+
+### 密度（Density）の統一
+- ホーム画面の余白、フォントサイズ、行間を基準とする
+- 新しい画面を作成する際は、ホーム画面と同じ密度を維持
+- 画面遷移時も一貫性を感じられるデザインを心がける
+
+### コンポーネントテーマ
+以下のコンポーネントは`ThemeData`内で共通化すること：
+- `appBarTheme`: ヘッダーのスタイル（濃いグレー背景、白文字）
+- `textTheme`: テキストスタイル（濃いグレーと薄いグレーの使い分け）
+- `dividerTheme`: 仕切り線のスタイル（薄いグレー）
+- `elevatedButtonTheme`: ボタンのスタイル（メインカラー）
+- `inputDecorationTheme`: 入力フィールドのスタイル（丸みを帯びた四角）
+
+## その他の規則
+
+### インポートの順序
+1. Dart標準ライブラリ
+2. Flutterパッケージ
+3. サードパーティパッケージ
+4. プロジェクト内のインポート
+
+```dart
+// ✅ Good: インポートの順序
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'package:useful_pavlok/core/constants/app_strings.dart';
+import 'package:useful_pavlok/domain/entities/user.dart';
+```
+
+### ファイルの命名規則
+- ファイル名は`snake_case`を使用
+- クラス名は`PascalCase`を使用
+- 定数は`lowerCamelCase`または`UPPER_SNAKE_CASE`を使用
+
+### コードフォーマット
+- `dart format`を実行してコードをフォーマット
+- 1行の長さは80文字を目安（100文字まで許容）
+
+## チェックリスト
+
+新しい機能を追加する際は、以下を確認：
+
+- [ ] Clean Architectureのレイヤー構造に従っているか
+- [ ] ビジネスロジックがUI層から分離されているか
+- [ ] Riverpodを使用して状態管理しているか
+- [ ] エラーハンドリングが適切に実装されているか（特にPavlok連携）
+- [ ] ハードコーディングがないか
+- [ ] `dynamic`型を使用していないか
+- [ ] 適切な型定義がされているか
+- [ ] テストが書かれているか
+- [ ] ドキュメントコメントが書かれているか
+- [ ] デザイン・カラーガイドラインに従っているか
+- [ ] ThemeDataを使用してスタイルを定義しているか
+- [ ] ハードコーディングされた色がないか
