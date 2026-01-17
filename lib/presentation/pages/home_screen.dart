@@ -264,108 +264,108 @@ class _HabitListItemState extends ConsumerState<_HabitListItem> {
     final isNumeric = HabitCompletionHelper.isNumericHabit(habit);
     final habitColor = Color(habit.color);
     final theme = Theme.of(context);
-    
-    // 今日の進捗を取得（数値型の場合）
-    final todayProgress = isNumeric
-        ? HabitCompletionHelper.getNumericProgress(
-            habit,
-            app_date_utils.AppDateUtils.today(),
-          )
-        : null;
 
-    return InkWell(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => HabitDetailScreen(habit: habit),
+    return Container(
+      color: theme.scaffoldBackgroundColor,
+      padding: const EdgeInsets.symmetric(horizontal: HomeScreen._leftPadding, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // 左端: 習慣の色の円形パーツ
+          Container(
+            width: HomeScreen._circleSize,
+            height: HomeScreen._circleSize,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: habitColor,
+            ),
           ),
-        );
-      },
-      child: Container(
-        color: theme.scaffoldBackgroundColor,
-        padding: const EdgeInsets.symmetric(horizontal: HomeScreen._leftPadding, vertical: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // 左端: 習慣の色の円形パーツ
-            Container(
-              width: HomeScreen._circleSize,
-              height: HomeScreen._circleSize,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: habitColor,
-              ),
-            ),
-            SizedBox(width: HomeScreen._circleGap),
-            
-            // 中央: タイトルと進捗（数値型の場合）
-            SizedBox(
-              width: HomeScreen._titleAreaWidth - HomeScreen._circleSize - HomeScreen._circleGap,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Flexible(
-                    child: Text(
-                      habit.name,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w500,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+          SizedBox(width: HomeScreen._circleGap),
+          
+          // 中央: タイトル（タップ可能）
+          SizedBox(
+            width: HomeScreen._titleAreaWidth - HomeScreen._circleSize - HomeScreen._circleGap,
+            child: InkWell(
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => HabitDetailScreen(habit: habit),
                   ),
-                  if (isNumeric && todayProgress != null && habit.unit != null) ...[
-                    const SizedBox(width: 8),
-                    Text(
-                      '${todayProgress.toStringAsFixed(1)} ${habit.unit}',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ],
+                );
+              },
+              borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Text(
+                  habit.name,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ),
-            
-            // 右側: 5日間のステータスグリッド（固定幅）
-            ...recentDays.map((date) {
-              return SizedBox(
-                width: HomeScreen._dateColumnWidth,
-                child: _buildStatusCell(habit, date, isNumeric, habitColor),
-              );
-            }),
-            SizedBox(width: HomeScreen._rightPadding),
-          ],
-        ),
+          ),
+          
+          // 右側: 5日間のステータスグリッド（固定幅）
+          ...recentDays.map((date) {
+            return SizedBox(
+              width: HomeScreen._dateColumnWidth,
+              child: _buildStatusCell(habit, date, isNumeric, habitColor),
+            );
+          }),
+          SizedBox(width: HomeScreen._rightPadding),
+        ],
       ),
     );
   }
 
   /// ステータスセルを構築します
   Widget _buildStatusCell(Habit habit, DateTime date, bool isNumeric, Color habitColor) {
+    final today = app_date_utils.AppDateUtils.today();
+    final isToday = app_date_utils.AppDateUtils.isSameDay(date, today);
+    
     final completionStatus = HabitCompletionHelper.getCompletionStatus(
       habit,
       date,
     );
     
+    // 今日でない場合は操作不可（視覚的フィードバック用）
+    final opacity = isToday ? 1.0 : 0.5;
+    
     return GestureDetector(
-      onTap: () {
-        if (isNumeric) {
-          _showNumericInputDialog(date);
-        } else {
-          _toggleCompletion(date);
-        }
-      },
+      // 今日でない場合はタップイベントを無効化
+      onTap: isToday
+          ? () {
+              if (isNumeric) {
+                _showNumericInputDialog(date);
+              } else {
+                _toggleCompletion(date);
+              }
+            }
+          : null,
       child: Container(
         height: HomeScreen._statusCellHeight,
         alignment: Alignment.center,
-        child: _buildStatusContent(habit, date, completionStatus, isNumeric, habitColor),
+        child: Opacity(
+          opacity: opacity,
+          child: _buildStatusContent(habit, date, completionStatus, isNumeric, habitColor),
+        ),
       ),
     );
   }
   
   /// 数値入力ダイアログを表示します
   Future<void> _showNumericInputDialog(DateTime date) async {
+    // 今日でない場合はダイアログを表示しない
+    final today = app_date_utils.AppDateUtils.today();
+    final isToday = app_date_utils.AppDateUtils.isSameDay(date, today);
+    
+    if (!isToday) {
+      return;
+    }
+    
     // 現在の習慣の状態を取得
     final habitAsync = ref.read(habitByIdProvider(widget.habit.id));
     final habit = await habitAsync.value;
@@ -390,7 +390,10 @@ class _HabitListItemState extends ConsumerState<_HabitListItem> {
               date,
               value,
             );
-            // エラーがなければ、_handleSaveでpop()が呼ばれる
+            // 成功時のみダイアログを閉じる
+            if (context.mounted && Navigator.canPop(context)) {
+              Navigator.of(context).pop();
+            }
           } catch (e) {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
@@ -400,6 +403,7 @@ class _HabitListItemState extends ConsumerState<_HabitListItem> {
                 ),
               );
             }
+            // エラー時はダイアログを閉じない（ユーザーが再試行できるように）
           }
         },
       ),
@@ -494,17 +498,11 @@ class _HabitListItemState extends ConsumerState<_HabitListItem> {
 
   /// 達成状況を切り替えます
   Future<void> _toggleCompletion(DateTime date) async {
+    // 今日でない場合は何もしない（タップイベント自体が無効化されているため、ここに到達することはないが、念のため）
     final today = app_date_utils.AppDateUtils.today();
     final isToday = app_date_utils.AppDateUtils.isSameDay(date, today);
     
     if (!isToday) {
-      // 過去の日付は変更できない
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('過去の日付は変更できません'),
-          duration: Duration(seconds: 1),
-        ),
-      );
       return;
     }
     

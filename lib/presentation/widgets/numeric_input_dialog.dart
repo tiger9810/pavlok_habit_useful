@@ -53,10 +53,7 @@ class _NumericInputDialogState extends State<NumericInputDialog> {
     if (_formKey.currentState!.validate()) {
       final value = double.tryParse(_controller.text.trim()) ?? 0.0;
       widget.onSave(value);
-      // onSaveコールバック内でpop()が呼ばれるため、ここでは呼ばない
-      if (Navigator.canPop(context)) {
-        Navigator.of(context).pop();
-      }
+      // onSaveコールバック内で成功時のみpop()が呼ばれる
     }
   }
 
