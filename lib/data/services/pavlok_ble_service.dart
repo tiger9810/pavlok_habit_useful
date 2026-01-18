@@ -31,12 +31,26 @@ class PavlokBleService {
   BluetoothCharacteristic? _beepCharacteristic; // サービス1000...の1002
   BluetoothCharacteristic? _shockCharacteristic; // サービス1000...の1003
 
-  // PavlokのService UUID（実際のデバイスで確認済み）
-  static const String pavlokServiceUuid = '6214b1a3-854c-4b2c-8054-780eb5c448b7';
+  // PavlokのService UUID（仕様書に基づくメイン制御サービス）
+  static const String pavlokServiceUuid = '156e1000-a300-4fea-897b-86f698d74461';
   
-  // 仕様書に基づくサービスUUID（末尾4桁ベース）
-  static const String service7000Uuid = '00007000-0000-1000-8000-00805f9b34fb';
-  static const String service1000Uuid = '00001000-0000-1000-8000-00805f9b34fb';
+  // 仕様書に基づくサービスUUID（完全128ビットUUID）
+  static const String _authServiceUuid = '156e7000-a300-4fea-897b-86f698d74461';
+  static const String _controlServiceUuid = '156e1000-a300-4fea-897b-86f698d74461';
+  
+  // キャラクタリスティックUUID（完全128ビットUUID）
+  static const String _unlockCharUuid = '156e7001-a300-4fea-897b-86f698d74461';
+  static const String _handshakeCharUuid = '156e1005-a300-4fea-897b-86f698d74461';
+  static const String _vibrateCharUuid = '156e1001-a300-4fea-897b-86f698d74461';
+  static const String _beepCharUuid = '156e1002-a300-4fea-897b-86f698d74461';
+  static const String _shockCharUuid = '156e1003-a300-4fea-897b-86f698d74461';
+  
+  // キャラクタリスティックID（末尾4桁）- 後方互換性のため残す
+  static const String _unlockCharId = '7001';
+  static const String _handshakeCharId = '1005';
+  static const String _vibrateCharId = '1001';
+  static const String _beepCharId = '1002';
+  static const String _shockCharId = '1003';
   
   // Unlockデータ（共通Step 1）
   static final Uint8List unlockData = Uint8List.fromList([0x12, 0x0d, 0xa0, 0x48, 0xad, 0x69, 0xe4]);
@@ -94,13 +108,13 @@ class PavlokBleService {
   /// 
   /// [timeout] スキャンタイムアウト（デフォルト: 10秒）
   /// 
-  /// Returns: Service UUID `6214b1a3-854c-4b2c-8054-780eb5c448b7` を持つPavlokデバイスのリスト
+  /// Returns: 検出された全てのBluetoothデバイスのリスト（Service UUID `156e1000-a300-4fea-897b-86f698d74461` を持つデバイスを優先）
   Future<List<ScanResult>> scanForPavlokDevices({
     Duration timeout = const Duration(seconds: 10),
   }) async {
     try {
       print('[PavlokBleService] ========================================');
-      print('[PavlokBleService] [START] Pavlok 3 デバイスをスキャン開始');
+      print('[PavlokBleService] [START] Bluetoothデバイスをスキャン開始');
       print('[PavlokBleService] ターゲットService UUID: $pavlokServiceUuid');
       print('[PavlokBleService] タイムアウト: ${timeout.inSeconds}秒');
       print('[PavlokBleService] ========================================');
@@ -109,16 +123,15 @@ class PavlokBleService {
         throw Exception('Bluetoothが有効になっていません');
       }
 
-      final List<ScanResult> pavlokDevices = [];
+      final List<ScanResult> allDevices = [];
       final Set<String> seenDeviceIds = {};
       final targetServiceUuid = Guid(pavlokServiceUuid);
 
-      print('[PavlokBleService] Service UUIDによる汎用フィルタリングを適用します');
+      print('[PavlokBleService] 全てのBluetoothデバイスをスキャンします');
 
-      // スキャン開始
+      // スキャン開始（全てのデバイスをスキャン）
       await FlutterBluePlus.startScan(
         timeout: timeout,
-        withServices: [targetServiceUuid],
       );
 
       print('[PavlokBleService] スキャン開始: タイムアウト=${timeout.inSeconds}秒');
@@ -136,34 +149,55 @@ class PavlokBleService {
             }
             seenDeviceIds.add(deviceId);
 
-            // Service UUIDでフィルタリング（決定論的フィルタリング）
-            // Pavlok 3共通のService UUIDを持つデバイスのみを抽出
+            // 全てのデバイスをリストに追加（Service UUIDによるフィルタリングはOSレベルで実施済み）
+            allDevices.add(scanResult);
+            
+            // デバイス情報をログ出力
+            final deviceName = scanResult.device.platformName.isNotEmpty
+                ? scanResult.device.platformName
+                : '名前なし';
+            final localName = scanResult.advertisementData.localName;
+            final deviceIdStr = scanResult.device.remoteId.toString();
+            final deviceIdPrefix = deviceIdStr.length >= 4 
+                ? deviceIdStr.substring(0, 4).toUpperCase()
+                : deviceIdStr.toUpperCase();
+            
+            // Pavlok 3かどうかを判定（Service UUIDまたはデバイス名で判定）
             final hasPavlokService = scanResult.advertisementData.serviceUuids
                 .any((uuid) => uuid == targetServiceUuid);
             
-            if (hasPavlokService) {
-              pavlokDevices.add(scanResult);
-              final deviceIdStr = scanResult.device.remoteId.toString();
-              final deviceIdPrefix = deviceIdStr.length >= 4 
-                  ? deviceIdStr.substring(0, 4).toUpperCase()
-                  : deviceIdStr.toUpperCase();
-              print('[PavlokBleService] ✅ Pavlok 3 を発見: PAVLOK-3-$deviceIdPrefix');
+            // デバイス名に"Pavlok"が含まれているかチェック（大文字小文字を区別しない）
+            final hasPavlokInName = deviceName.toLowerCase().contains('pavlok') ||
+                (localName.isNotEmpty && localName.toLowerCase().contains('pavlok'));
+            
+            final isPavlokDevice = hasPavlokService || hasPavlokInName;
+            
+            if (isPavlokDevice) {
+              print('[PavlokBleService] ✅ Pavlok 3 を発見: $deviceName (PAVLOK-3-$deviceIdPrefix)');
+              if (hasPavlokService) {
+                print('[PavlokBleService]   判定理由: Service UUID一致');
+              } else if (hasPavlokInName) {
+                print('[PavlokBleService]   判定理由: デバイス名に"Pavlok"が含まれています');
+              }
               developer.log(
-                'Pavlok 3 デバイス発見: PAVLOK-3-$deviceIdPrefix (${scanResult.device.remoteId})',
+                'Pavlok 3 デバイス発見: $deviceName (PAVLOK-3-$deviceIdPrefix, ${scanResult.device.remoteId})',
                 name: 'PavlokBleService',
               );
             } else {
-              // 無関係なデバイス（テレビやイヤホンなど）はログに出力しない
-              // これにより、Pavlok 3のみがリストに表示される
+              print('[PavlokBleService] 📱 その他のデバイス: $deviceName ($deviceIdPrefix)');
+              developer.log(
+                'その他のデバイス発見: $deviceName ($deviceIdPrefix, ${scanResult.device.remoteId})',
+                name: 'PavlokBleService',
+              );
             }
           }
         }
       } on TimeoutException {
         // タイムアウト時は既に収集したデバイスリストを返す
         print('[PavlokBleService] ⏱️ スキャンタイムアウト: ${timeout.inSeconds}秒経過');
-        print('[PavlokBleService] これまでに発見されたデバイス数: ${pavlokDevices.length}');
+        print('[PavlokBleService] これまでに発見されたデバイス数: ${allDevices.length}');
         developer.log(
-          'スキャンタイムアウト: ${timeout.inSeconds}秒経過、発見されたデバイス数: ${pavlokDevices.length}',
+          'スキャンタイムアウト: ${timeout.inSeconds}秒経過、発見されたデバイス数: ${allDevices.length}',
           name: 'PavlokBleService',
         );
       } catch (e) {
@@ -185,21 +219,21 @@ class PavlokBleService {
 
       print('[PavlokBleService] ========================================');
       print('[PavlokBleService] [END] スキャン完了');
-      print('[PavlokBleService] 発見されたPavlok 3デバイス数: ${pavlokDevices.length}');
+      print('[PavlokBleService] 発見されたBluetoothデバイス数: ${allDevices.length}');
       print('[PavlokBleService] ========================================');
 
-      if (pavlokDevices.isEmpty) {
-        print('[PavlokBleService] ⚠️ Pavlok 3デバイス（Service UUID: $pavlokServiceUuid）が見つかりませんでした');
+      if (allDevices.isEmpty) {
+        print('[PavlokBleService] ⚠️ Bluetoothデバイス（Service UUID: $pavlokServiceUuid）が見つかりませんでした');
         print('[PavlokBleService] 確認事項:');
         print('[PavlokBleService] 1. Bluetoothが有効になっているか');
         print('[PavlokBleService] 2. Pavlok 3デバイスが電源オンで、ペアリング可能な状態か');
         print('[PavlokBleService] 3. macOSの「システム設定 > プライバシーとセキュリティ > Bluetooth」');
         print('[PavlokBleService]    で「Runner」または「useful_pavlok」に権限が与えられているか');
       } else {
-        print('[PavlokBleService] ✅ スキャン成功: ${pavlokDevices.length}台のPavlok 3デバイスを発見');
+        print('[PavlokBleService] ✅ スキャン成功: ${allDevices.length}台のBluetoothデバイスを発見');
       }
 
-      return pavlokDevices;
+      return allDevices;
     } catch (e) {
       print('[PavlokBleService] ❌ スキャンエラー: $e');
       developer.log('スキャンエラー: $e', name: 'PavlokBleService');
@@ -391,20 +425,35 @@ class PavlokBleService {
 
       print('[PavlokBleService] [STEP 3] ✅ ターゲットService UUIDを確認しました');
 
-      // ステップ4: コマンド送信用のキャラクタリスティックを探す
-      print('[PavlokBleService] [STEP 4] コマンド送信用キャラクタリスティックを探索中...');
+      // ステップ4: 仕様書に基づくキャラクタリスティックを探索（UUID末尾4桁ベース）
+      print('[PavlokBleService] [STEP 4] 仕様書に基づくキャラクタリスティックを探索中...');
       
-      _commandCharacteristic = _findWritableCharacteristicInService(pavlokService);
+      // 全サービスから必要なキャラクタリスティックを探索
+      _unlockCharacteristic = _findCharacteristicByLast4Digits(services, '7001');
+      _handshakeCharacteristic = _findCharacteristicByLast4Digits(services, '1005');
+      _vibrateCharacteristic = _findCharacteristicByLast4Digits(services, '1001');
+      _beepCharacteristic = _findCharacteristicByLast4Digits(services, '1002');
+      _shockCharacteristic = _findCharacteristicByLast4Digits(services, '1003');
+      
+      // 後方互換性のため_commandCharacteristicも設定（vibrateCharacteristicを使用）
+      _commandCharacteristic = _vibrateCharacteristic;
 
-      if (_commandCharacteristic == null) {
-        print('[PavlokBleService] [STEP 4] ❌ 書き込み可能なキャラクタリスティックが見つかりません');
-        throw Exception('コマンド送信用の書き込み可能なキャラクタリスティックが見つかりません');
+      print('[PavlokBleService] [STEP 4] ✅ キャラクタリスティック探索完了');
+      print('[PavlokBleService]   Unlock (7001): ${_unlockCharacteristic != null ? "✅" : "❌"}');
+      print('[PavlokBleService]   Handshake (1005): ${_handshakeCharacteristic != null ? "✅" : "❌"}');
+      print('[PavlokBleService]   Vibrate (1001): ${_vibrateCharacteristic != null ? "✅" : "❌"}');
+      print('[PavlokBleService]   Beep (1002): ${_beepCharacteristic != null ? "✅" : "❌"}');
+      print('[PavlokBleService]   Shock (1003): ${_shockCharacteristic != null ? "✅" : "❌"}');
+      
+      if (_unlockCharacteristic == null) {
+        throw Exception('Unlockキャラクタリスティック（7001）が見つかりません');
       }
-
-      print('[PavlokBleService] [STEP 4] ✅ コマンド送信用キャラクタリスティックを発見');
-      print('[PavlokBleService] キャラクタリスティックUUID: ${_commandCharacteristic!.uuid}');
+      if (_vibrateCharacteristic == null && _beepCharacteristic == null && _shockCharacteristic == null) {
+        throw Exception('コマンド送信用のキャラクタリスティックが見つかりません');
+      }
+      
       developer.log(
-        'コマンド送信用キャラクタリスティック発見: ${_commandCharacteristic!.uuid}',
+        'キャラクタリスティック探索完了: Unlock=${_unlockCharacteristic != null}, Vibrate=${_vibrateCharacteristic != null}, Beep=${_beepCharacteristic != null}, Shock=${_shockCharacteristic != null}',
         name: 'PavlokBleService',
       );
 
@@ -513,71 +562,444 @@ class PavlokBleService {
       _connectedDevice = null;
       _commandCharacteristic = null;
       _batteryCharacteristic = null;
+      // キャッシュをクリア
+      _cachedServices = null;
+      _unlockCharacteristic = null;
+      _handshakeCharacteristic = null;
+      _vibrateCharacteristic = null;
+      _beepCharacteristic = null;
+      _shockCharacteristic = null;
     }
   }
 
-  /// ショックを実行します
-  /// 
-  /// [intensity] 強度（0-100）
-  Future<void> triggerShock(int intensity) async {
-    await _sendCommand(_PavlokCommand.shock, intensity);
-  }
-
-  /// バイブを実行します（スニッフィングされた真実のパケットを使用）
-  /// 
-  /// [intensity] 強度（0-100）- 現在は無視され、スニッフィングされた値が使用されます
-  Future<void> triggerVibrate(int intensity) async {
-    await _sendSniffedData(sniffedVibrateHex);
-  }
-  
-  /// スニッフィングされたデータを直接送信します
-  /// 
-  /// [hexString] 16進数文字列（例: "120da048ad69e4"）
-  Future<void> _sendSniffedData(String hexString) async {
-    if (_commandCharacteristic == null) {
-      throw Exception('デバイスに接続されていません');
+  /// Step 1: Unlock（認証）
+  Future<void> unlock() async {
+    // サービス探索の同期管理
+    if (_connectedDevice == null) {
+      throw Exception('Device not connected');
+    }
+    
+    // サービス取得（キャッシュ利用）
+    final services = await _getOrDiscoverServices();
+    
+    // デバッグログ: すべてのサービスとキャラクタリスティックを出力（サービス構造の確認用）
+    // 本番環境では無効化してパフォーマンスを向上
+    if (kDebugMode) {
+      print('[Pavlok] [Unlock] [DEBUG] Service structure discovery:');
+      for (final service in services) {
+        print('[Pavlok] [Unlock] [DEBUG] Service: ${service.uuid}');
+        for (final chr in service.characteristics) {
+          final shortId = _extractCharacteristicId(chr.uuid.toString());
+          print('[Pavlok] [Unlock] [DEBUG]   - Characteristic: ${chr.uuid} (UUID末尾4桁: $shortId)');
+        }
+      }
+    }
+    
+    // 認証サービス（156e7000）を検索 - Pavlok ID一致ベースで誤マッチを防ぐ
+    print('[Pavlok] [Unlock] Searching for service: ${_authServiceUuid} (target Pavlok ID: 7000)');
+    BluetoothService? authService = _findServiceByUuid(services, _authServiceUuid);
+    
+    // フォールバック: 156e7000が見つからない場合、156e1000内で7001を検索
+    if (authService == null) {
+      print('[Pavlok] [Unlock] Service 156e7000 (Pavlok ID: 7000) not found, trying fallback to 156e1000...');
+      final controlService = _findServiceByUuid(services, _controlServiceUuid);
+      if (controlService != null) {
+        print('[Pavlok] [Unlock] Service 156e1000 found, searching for 7001 (Pavlok ID) inside...');
+        // 156e1000内で7001を検索（Pavlok IDベース）
+        final fallbackChar = _findCharacteristicByUuid(controlService.characteristics, _unlockCharUuid);
+        if (fallbackChar == null) {
+          // 短縮IDでも試行
+          final fallbackCharById = _findCharacteristicById(controlService.characteristics, _unlockCharId);
+          if (fallbackCharById != null) {
+            print('[Pavlok] [Unlock] ✓ Found 7001 in service 156e1000 (fallback, by short ID)');
+            authService = controlService;
+          }
+        } else {
+          print('[Pavlok] [Unlock] ✓ Found 7001 in service 156e1000 (fallback, by UUID)');
+          authService = controlService;
+        }
+      }
+    }
+    
+    if (authService == null) {
+      print('[Pavlok] [Unlock] ERROR: Service 156e7000 (Pavlok ID: 7000) not found!');
+      print('[Pavlok] [Unlock] Available services:');
+      for (final service in services) {
+        final servicePavlokId = _extractPavlokId(service.uuid.toString());
+        print('[Pavlok] [Unlock]   - Service: ${service.uuid} (Pavlok ID: $servicePavlokId)');
+      }
+      throw Exception('Auth service (156e7000, Pavlok ID: 7000) not found');
     }
 
-    if (_connectedDevice == null || !_connectedDevice!.isConnected) {
-      throw Exception('デバイスが切断されています');
+    final servicePavlokId = _extractPavlokId(authService.uuid.toString());
+    print('[Pavlok] [Unlock] ✓ Service found: ${authService.uuid} (Pavlok ID: $servicePavlokId)');
+    
+    // 認証サービス内のキャラクタリスティック一覧を表示
+    print('[Pavlok] [Unlock] Characteristics in service ${authService.uuid}:');
+    for (final chr in authService.characteristics) {
+      final chrPavlokId = _extractPavlokId(chr.uuid.toString());
+      final shortId = _extractCharacteristicId(chr.uuid.toString());
+      print('[Pavlok] [Unlock]   - ${chr.uuid} (Pavlok ID: $chrPavlokId, UUID末尾4桁: $shortId)');
     }
 
-    // 16進数文字列をUint8Listに変換
-    final commandData = _hexStringToBytes(hexString);
+    // キャラクタリスティック検索: 完全UUID → Pavlok ID一致の順で試行
+    BluetoothCharacteristic? unlockChar;
+    
+    // 方法1: 完全UUIDで検索（Pavlok ID一致も含む）
+    print('[Pavlok] [Unlock] Searching for characteristic: ${_unlockCharUuid} (target Pavlok ID: 7001)');
+    unlockChar = _findCharacteristicByUuid(authService.characteristics, _unlockCharUuid);
+    
+    // 方法2: 短縮ID（7001）で検索（完全UUIDで見つからない場合）
+    if (unlockChar == null) {
+      print('[Pavlok] [Unlock] Characteristic not found by UUID, trying by short ID: ${_unlockCharId}');
+      unlockChar = _findCharacteristicById(authService.characteristics, _unlockCharId);
+    }
+    
+    if (unlockChar == null) {
+      print('[Pavlok] [Unlock] ERROR: Characteristic 156e7001 (Pavlok ID: 7001) not found');
+      print('[Pavlok] [Unlock] Available characteristics in service ${authService.uuid}:');
+      for (final chr in authService.characteristics) {
+        final chrPavlokId = _extractPavlokId(chr.uuid.toString());
+        final shortId = _extractCharacteristicId(chr.uuid.toString());
+        print('[Pavlok] [Unlock]   - ${chr.uuid} (Pavlok ID: $chrPavlokId, UUID末尾4桁: $shortId)');
+      }
+      throw Exception('Unlock characteristic (156e7001, Pavlok ID: 7001) not found.');
+    }
+    
+    final foundPavlokId = _extractPavlokId(unlockChar.uuid.toString());
+    print('[Pavlok] [Unlock] ✓ Characteristic found: ${unlockChar.uuid} (Pavlok ID: $foundPavlokId)');
 
+    // **必須の準備シーケンス**: 7001への書き込み直前に、必ずsetNotifyValue(true)を実行
+    print('[Pavlok] [Unlock] 🔐 Executing required preparation sequence: setNotifyValue(true)');
     try {
-      print('[PavlokBleService] Sending Sniffed Data: $hexString to ${_commandCharacteristic!.uuid}');
-      print('[PavlokBleService] 送信データ（バイト）: ${commandData.map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}').join(', ')}');
-      
-      await _commandCharacteristic!.write(
-        commandData,
-        withoutResponse: _commandCharacteristic!.properties.writeWithoutResponse,
-      );
-
-      developer.log(
-        'スニッフィングされたデータ送信成功: $hexString',
-        name: 'PavlokBleService',
-      );
-      print('[PavlokBleService] ✅ スニッフィングされたデータの送信が完了しました');
+      await unlockChar.setNotifyValue(true);
+      print('[Pavlok] [Unlock] ✓ Notify enabled for unlock (required preparation)');
     } catch (e) {
-      print('[PavlokBleService] ❌ スニッフィングされたデータの送信エラー: $e');
-      developer.log('スニッフィングされたデータの送信エラー: $e', name: 'PavlokBleService');
+      print('[Pavlok] [Unlock] ⚠️ Failed to enable notify, but continuing: $e');
+      // エラーが発生しても続行（一部のデバイスではnotifyがサポートされていない場合がある）
+    }
+
+    // Unlockデータの準備とログ出力
+    final unlockData = Uint8List.fromList([0x12, 0x0d, 0xa0, 0x48, 0xad, 0x69, 0xe4]);
+    final unlockDataHex = unlockData.map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}').join(', ');
+    final targetUuid = unlockChar.uuid.toString();
+    
+    print('[Pavlok] [Unlock] 📤 Sending Unlock packet:');
+    print('[Pavlok] [Unlock]   - Target UUID: $targetUuid');
+    print('[Pavlok] [Unlock]   - Data length: ${unlockData.length} bytes');
+    print('[Pavlok] [Unlock]   - Data: [$unlockDataHex]');
+
+    // Unlockパケット送信
+    if (unlockChar.properties.write) {
+      await unlockChar.write(unlockData, withoutResponse: false);
+    } else if (unlockChar.properties.writeWithoutResponse) {
+      await unlockChar.write(unlockData, withoutResponse: true);
+    } else {
+      throw Exception('Unlock characteristic does not support write');
+    }
+
+    print('[Pavlok] [Unlock] ✓ Unlock packet sent, waiting 200ms for device to be ready...');
+    // **必須**: Unlockパケット送信後、メインコマンドを送る前に200ms待機（最適化: 500ms → 200ms）
+    await Future.delayed(const Duration(milliseconds: 200));
+    print('[Pavlok3Controller] ✓ Unlocked and ready for commands');
+  }
+
+  /// 共通Step 1: Unlockを送信します（後方互換性のため残す）
+  /// 
+  /// サービス7000...の7001へ[0x12, 0x0d, 0xa0, 0x48, 0xad, 0x69, 0xe4]を送信し、500ms待機
+  Future<void> _sendUnlock() async {
+    await unlock();
+  }
+
+  /// Step 2: Handshake（セッション維持）
+  Future<void> handshake() async {
+    // サービス探索の同期管理
+    if (_connectedDevice == null) {
+      throw Exception('Device not connected');
+    }
+    
+    // サービス取得（キャッシュ利用）
+    final services = await _getOrDiscoverServices();
+    
+    // 完全UUIDで制御サービスを検索
+    final controlService = _findServiceByUuid(services, _controlServiceUuid);
+    if (controlService == null) {
+      throw Exception('Control service (156e1000) not found');
+    }
+
+    // 完全UUIDでHandshakeキャラクタリスティックを検索
+    final handshakeChar = _findCharacteristicByUuid(controlService.characteristics, _handshakeCharUuid);
+    if (handshakeChar == null) {
+      print('[Pavlok] [Handshake] Characteristic 156e1005 not found');
+      print('[Pavlok] [Handshake] Available characteristics:');
+      for (final chr in controlService.characteristics) {
+        print('[Pavlok] [Handshake]   - ${chr.uuid.toString()}');
+      }
+      throw Exception('Handshake characteristic (156e1005) not found');
+    }
+
+    final handshakeData = Uint8List.fromList([0x18, 0x02, 0x20, 0x17, 0x06, 0x01, 0x26, 0xe0]);
+
+    if (handshakeChar.properties.write) {
+      await handshakeChar.write(handshakeData, withoutResponse: false);
+    } else if (handshakeChar.properties.writeWithoutResponse) {
+      await handshakeChar.write(handshakeData, withoutResponse: true);
+    } else {
+      throw Exception('Handshake characteristic does not support write');
+    }
+
+    await Future.delayed(const Duration(milliseconds: 50)); // 最適化: 100ms → 50ms
+    print('[Pavlok3Controller] ✓ Handshake completed');
+  }
+
+  /// Shock専用Step 2: Handshakeを送信します（後方互換性のため残す）
+  /// 
+  /// サービス1000...の1005へ[0x18, 0x02, 0x20, 0x17, 0x06, 0x01, 0x26, 0xe0]を送信し、100ms待機
+  Future<void> _sendHandshake() async {
+    await handshake();
+  }
+
+  /// Step 3: Vibrate（振動）
+  /// 
+  /// [intensity] 0-100 の強度を指定
+  /// [autoUnlock] 自動的にUnlockを実行するか（デフォルト: true）
+  Future<void> triggerVibrate(int intensity, {bool autoUnlock = true}) async {
+    try {
+      // 1. 接続状態確認
+      if (_connectedDevice == null) {
+        throw Exception('Device not connected');
+      }
+
+      // 2. 自動認証（オプション）
+      if (autoUnlock) {
+        print('[Pavlok] [Vibrate] Auto-unlocking device...');
+        await unlock();
+        await Future.delayed(const Duration(milliseconds: 50)); // 認証後の待機（最適化: 100ms → 50ms）
+      }
+
+      // 3. レベルクランプ
+      final clampedLevel = intensity.clamp(0, 100);
+
+      // 4. データ準備
+      final bytes = Uint8List.fromList([0x81, 0x0c, clampedLevel, 0x16, 0x16]);
+      final bytesHexString = bytes.map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}').join(', ');
+
+      // 5. サービス取得（キャッシュ利用）
+      final services = await _getOrDiscoverServices();
+      
+      final service = _findServiceByUuid(services, _controlServiceUuid);
+      if (service == null) {
+        throw Exception('Service 156e1000 not found');
+      }
+
+      // 6. キャラクタリスティック検索（完全UUIDベース）
+      final characteristic = _findCharacteristicByUuid(service.characteristics, _vibrateCharUuid);
+      
+      if (characteristic == null) {
+        // デバッグ出力: 利用可能なキャラクタリスティックを表示
+        print('[Pavlok] [Vibrate] Characteristic 156e1001 not found');
+        print('[Pavlok] [Vibrate] Available characteristics:');
+        for (final chr in service.characteristics) {
+          print('[Pavlok] [Vibrate]   - ${chr.uuid.toString()}');
+        }
+        throw Exception('Vibrate characteristic (156e1001) not found');
+      }
+
+      // 7. デバッグ出力（送信直前の詳細ログ）
+      final targetUuid = characteristic.uuid.toString();
+      print('[Pavlok] [Vibrate] 📤 Sending Vibrate command:');
+      print('[Pavlok] [Vibrate]   - Target UUID: $targetUuid');
+      print('[Pavlok] [Vibrate]   - Data length: ${bytes.length} bytes');
+      print('[Pavlok] [Vibrate]   - Data: [$bytesHexString]');
+      print('[Pavlok] [Vibrate]   - Level: $clampedLevel (0x${clampedLevel.toRadixString(16).padLeft(2, '0')})');
+      print('[Pavlok] [Vibrate]   - UUID末尾4桁: 1001');
+
+      // 8. 書き込みプロパティ確認
+      if (!characteristic.properties.write && !characteristic.properties.writeWithoutResponse) {
+        throw Exception('Vibrate characteristic is not writable');
+      }
+
+      // 9. 書き込み実行（writeWithoutResponseが優先）
+      if (characteristic.properties.writeWithoutResponse) {
+        await characteristic.write(bytes, withoutResponse: true);
+      } else {
+        await characteristic.write(bytes, withoutResponse: false);
+      }
+
+      print('[Pavlok] [Vibrate] ✓ Success: VIBRATE $clampedLevel% sent to $targetUuid (${bytes.length} bytes)');
+    } catch (e) {
+      print('[Pavlok Error] [Vibrate] Vibrate command failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Step 3: Beep（ビープ音）
+  /// 
+  /// [intensity] 0-100 の強度を指定
+  /// [autoUnlock] 自動的にUnlockを実行するか（デフォルト: true）
+  Future<void> triggerAlarm(int intensity, {bool autoUnlock = true}) async {
+    try {
+      // 1. 接続状態確認
+      if (_connectedDevice == null) {
+        throw Exception('Device not connected');
+      }
+
+      // 2. 自動認証（オプション）
+      if (autoUnlock) {
+        print('[Pavlok] [Beep] Auto-unlocking device...');
+        await unlock();
+        await Future.delayed(const Duration(milliseconds: 50)); // 認証後の待機（最適化: 100ms → 50ms）
+      }
+
+      // 3. レベルクランプ
+      final clampedLevel = intensity.clamp(0, 100);
+
+      // 4. データ準備（Vibrateと同じ形式）
+      final bytes = Uint8List.fromList([0x81, 0x0c, clampedLevel, 0x16, 0x16]);
+      final bytesHexString = bytes.map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}').join(', ');
+
+      // 5. サービス取得（キャッシュ利用）
+      final services = await _getOrDiscoverServices();
+      
+      final service = _findServiceByUuid(services, _controlServiceUuid);
+      if (service == null) {
+        throw Exception('Service 156e1000 not found');
+      }
+
+      // 6. キャラクタリスティック検索（完全UUIDベース：156e1002）
+      final characteristic = _findCharacteristicByUuid(service.characteristics, _beepCharUuid);
+      
+      if (characteristic == null) {
+        // デバッグ出力: 利用可能なキャラクタリスティックを表示
+        print('[Pavlok] [Beep] Characteristic 156e1002 not found');
+        print('[Pavlok] [Beep] Available characteristics:');
+        for (final chr in service.characteristics) {
+          print('[Pavlok] [Beep]   - ${chr.uuid.toString()}');
+        }
+        throw Exception('Beep characteristic (156e1002) not found');
+      }
+
+      // 7. デバッグ出力（送信直前の詳細ログ）
+      final targetUuid = characteristic.uuid.toString();
+      print('[Pavlok] [Beep] 📤 Sending Beep command:');
+      print('[Pavlok] [Beep]   - Target UUID: $targetUuid');
+      print('[Pavlok] [Beep]   - Data length: ${bytes.length} bytes');
+      print('[Pavlok] [Beep]   - Data: [$bytesHexString]');
+      print('[Pavlok] [Beep]   - Level: $clampedLevel (0x${clampedLevel.toRadixString(16).padLeft(2, '0')})');
+      print('[Pavlok] [Beep]   - UUID末尾4桁: 1002');
+
+      // 8. 書き込みプロパティ確認
+      if (!characteristic.properties.write && !characteristic.properties.writeWithoutResponse) {
+        throw Exception('Beep characteristic is not writable');
+      }
+
+      // 9. 書き込み実行（writeWithoutResponseが優先）
+      if (characteristic.properties.writeWithoutResponse) {
+        await characteristic.write(bytes, withoutResponse: true);
+      } else {
+        await characteristic.write(bytes, withoutResponse: false);
+      }
+
+      print('[Pavlok] [Beep] ✓ Success: BEEP $clampedLevel% sent to $targetUuid (${bytes.length} bytes)');
+    } catch (e) {
+      print('[Pavlok Error] [Beep] Beep command failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Step 3: Shock（電気ショック）
+  /// 
+  /// [intensity] 0-100 の強度を指定
+  /// [autoUnlock] 自動的にUnlockを実行するか（デフォルト: true）
+  /// 注意: Handshake が必須です
+  Future<void> triggerShock(int intensity, {bool autoUnlock = true}) async {
+    try {
+      // 1. 接続状態確認
+      if (_connectedDevice == null) {
+        throw Exception('Device not connected');
+      }
+
+      // 2. Step 1: Unlock（認証）
+      if (autoUnlock) {
+        print('[Pavlok] [Shock] Step 1: Unlocking device...');
+        await unlock();
+        await Future.delayed(const Duration(milliseconds: 50)); // 認証後の待機（最適化: 100ms → 50ms）
+      }
+
+      // 3. Step 2: Handshake（セッション維持） - **必須**
+      print('[Pavlok] [Shock] Step 2: Sending handshake to Status (1005)...');
+      await handshake();
+      await Future.delayed(const Duration(milliseconds: 50)); // ハンドシェイク後の待機（最適化: 100ms → 50ms）
+
+      // 4. Step 3: Shock送信準備
+      print('[Pavlok] [Shock] Step 3: Sending shock command to 1003...');
+      
+      // レベルクランプ
+      final clampedLevel = intensity.clamp(0, 100);
+
+      // **重要**: 2バイトのみ送信（パディング禁止）- 厳格に2バイトのみ
+      final bytes = Uint8List.fromList([0x81, clampedLevel]);
+      final bytesHexString = bytes.map((b) => '0x${b.toRadixString(16).padLeft(2, '0')}').join(', ');
+      
+      // データ長の厳格な確認（2バイトのみであることを保証）
+      assert(bytes.length == 2, 'Shock data must be exactly 2 bytes, got ${bytes.length}');
+      if (bytes.length != 2) {
+        throw Exception('Shock data must be exactly 2 bytes, got ${bytes.length}. Padding is forbidden.');
+      }
+
+      // 5. サービス取得（キャッシュ利用）
+      final services = await _getOrDiscoverServices();
+      
+      final service1000 = _findServiceByUuid(services, _controlServiceUuid);
+      if (service1000 == null) {
+        throw Exception('Service 156e1000 not found');
+      }
+
+      // 6. キャラクタリスティック検索（完全UUIDベース：156e1003）
+      final shockCharacteristic = _findCharacteristicByUuid(service1000.characteristics, _shockCharUuid);
+
+      if (shockCharacteristic == null) {
+        print('[Pavlok] [Shock] Characteristic 156e1003 not found');
+        print('[Pavlok] [Shock] Available characteristics:');
+        for (final chr in service1000.characteristics) {
+          print('[Pavlok] [Shock]   - ${chr.uuid.toString()}');
+        }
+        throw Exception('Shock characteristic (156e1003) not found');
+      }
+
+      // 7. デバッグ出力（送信直前の詳細ログ - 2バイト厳守を証明）
+      final targetUuid = shockCharacteristic.uuid.toString();
+      print('[Pavlok] [Shock] 📤 Sending Shock command:');
+      print('[Pavlok] [Shock]   - Target UUID: $targetUuid');
+      print('[Pavlok] [Shock]   - Data length: ${bytes.length} bytes (MUST be 2 bytes, no padding)');
+      print('[Pavlok] [Shock]   - Data: [$bytesHexString]');
+      print('[Pavlok] [Shock]   - Level: $clampedLevel (0x${clampedLevel.toRadixString(16).padLeft(2, '0')})');
+      print('[Pavlok] [Shock]   - UUID末尾4桁: 1003');
+      print('[Pavlok] [Shock] ✅ Data length verified: ${bytes.length} bytes (correct)');
+
+      // 8. 書き込みプロパティ確認
+      if (!shockCharacteristic.properties.write && !shockCharacteristic.properties.writeWithoutResponse) {
+        throw Exception('Shock characteristic is not writable');
+      }
+
+      // 9. 書き込み実行（**2バイトのみ**、writeを優先）
+      if (shockCharacteristic.properties.write) {
+        await shockCharacteristic.write(bytes, withoutResponse: false);
+      } else {
+        await shockCharacteristic.write(bytes, withoutResponse: true);
+      }
+
+      print('[Pavlok] [Shock] ✓ Success: SHOCK $clampedLevel% sent to $targetUuid (${bytes.length} bytes, verified)');
+    } catch (e) {
+      print('[Pavlok Error] [Shock] Shock command failed: $e');
       rethrow;
     }
   }
   
-  /// スニッフィングされたバイブデータを直接送信します（公開メソッド）
-  /// 
-  /// UIから直接呼び出し可能なメソッド
+  /// スニッフィングされたバイブデータを直接送信します（後方互換性のため残す）
   Future<void> sendSniffedVibrateData() async {
-    await _sendSniffedData(sniffedVibrateHex);
-  }
-
-  /// アラームを実行します
-  /// 
-  /// [intensity] 強度（0-100）
-  Future<void> triggerAlarm(int intensity) async {
-    await _sendCommand(_PavlokCommand.alarm, intensity);
+    // 新しい仕様に基づくtriggerVibrateを使用
+    await triggerVibrate(50); // デフォルト強度50%
   }
 
   /// バッテリー残量を取得します
@@ -674,25 +1096,191 @@ class PavlokBleService {
     return Uint8List.fromList(bytes);
   }
 
-  /// 指定されたサービス内で書き込み可能なキャラクタリスティックを検索します
-  /// 優先順位: 0007 (targetCharacteristicUuid) > その他の書き込み可能なキャラクタリスティック
-  BluetoothCharacteristic? _findWritableCharacteristicInService(
-    BluetoothService service,
-  ) {
-    final targetUuid = Guid(targetCharacteristicUuid);
+  /// サービスとキャラクタリスティックを取得（キャッシュ利用）
+  /// 
+  /// キャッシュがあればそれを使用し、なければ探索してキャッシュします。
+  /// これにより、discoverServices()の繰り返し呼び出しを削減します。
+  Future<List<BluetoothService>> _getOrDiscoverServices() async {
+    if (_connectedDevice == null) {
+      throw Exception('Device not connected');
+    }
+
+    // キャッシュがあればそれを使用
+    if (_cachedServices != null && _cachedServices!.isNotEmpty) {
+      return _cachedServices!;
+    }
+
+    // キャッシュがない場合、探索してキャッシュ
+    _cachedServices = await _connectedDevice!.discoverServices(timeout: 5);
+    return _cachedServices!;
+  }
+
+  /// UUIDを正規化（ハイフンの有無に左右されない比較のため）
+  String _normalizeUuid(String uuid) {
+    // ハイフンを削除して小文字化
+    return uuid.toLowerCase().replaceAll('-', '');
+  }
+
+  /// 2つのUUIDが一致するか確認（正規化後）
+  bool _uuidMatches(String uuid1, String uuid2) {
+    return _normalizeUuid(uuid1) == _normalizeUuid(uuid2);
+  }
+
+  /// UUID末尾4桁を抽出（後方互換性のため残す）
+  String _extractCharacteristicId(String uuid) {
+    final uuidClean = uuid.toLowerCase().replaceAll('-', '');
+    if (uuidClean.length >= 4) {
+      return uuidClean.substring(uuidClean.length - 4);
+    }
+    return uuidClean;
+  }
+
+  /// Pavlok用のID抽出: 156eXXXX形式からXXXXを抽出、または短縮表記をそのまま返す
+  /// 
+  /// 例:
+  /// - "156e7001-a300-4fea-897b-86f698d74461" → "7001"
+  /// - "7001" → "7001"
+  /// - "1001" → "1001"
+  String _extractPavlokId(String uuidString) {
+    final normalized = uuidString.toLowerCase().replaceAll('-', '');
     
-    // まず、ターゲットキャラクタリスティック（0007）を探す
-    for (final characteristic in service.characteristics) {
-      if (characteristic.uuid == targetUuid) {
-        if (characteristic.properties.write ||
-            characteristic.properties.writeWithoutResponse) {
-          print('[PavlokBleService] ✅ ターゲットキャラクタリスティック0007を発見');
-          return characteristic;
-        }
+    // 短縮表記（4桁の16進数）の場合はそのまま返す
+    if (normalized.length == 4 && RegExp(r'^[0-9a-f]{4}$').hasMatch(normalized)) {
+      return normalized;
+    }
+    
+    // 156eXXXX形式の場合、156e直後の4桁（位置4-8）を抽出
+    if (normalized.startsWith('156e') && normalized.length >= 8) {
+      return normalized.substring(4, 8);
+    }
+    
+    // それ以外は従来の末尾4桁を返す（デバッグ用、誤マッチには使わない）
+    if (normalized.length >= 4) {
+      return normalized.substring(normalized.length - 4);
+    }
+    
+    return normalized;
+  }
+
+  /// サービスを完全UUIDで検索（Pavlok ID一致ベースのフォールバック）
+  BluetoothService? _findServiceByUuid(
+    List<BluetoothService> services,
+    String targetUuid,
+  ) {
+    print('[Discovery] Searching for service: $targetUuid');
+    final targetPavlokId = _extractPavlokId(targetUuid);
+    print('[Discovery] Target Pavlok ID: $targetPavlokId');
+    print('[Discovery] Available services (${services.length} total):');
+    
+    for (final service in services) {
+      final serviceUuid = service.uuid.toString();
+      final servicePavlokId = _extractPavlokId(serviceUuid);
+      print('[Discovery] Found Service: $serviceUuid (Pavlok ID: $servicePavlokId)');
+      
+      // 方法1: 完全UUIDマッチング（優先）
+      if (_uuidMatches(serviceUuid, targetUuid)) {
+        print('[Discovery] ✅ Service matched (exact UUID): $serviceUuid');
+        return service;
+      }
+      
+      // 方法2: Pavlok ID一致（フォールバック）- 誤マッチを防ぐためcontains()は使わない
+      if (servicePavlokId == targetPavlokId) {
+        print('[Discovery] ✅ Service matched (Pavlok ID match): $serviceUuid (ID: $servicePavlokId)');
+        return service;
       }
     }
     
-    // ターゲットが見つからない場合、その他の書き込み可能なキャラクタリスティックを返す
+    print('[Discovery] ❌ Service not found: $targetUuid (target Pavlok ID: $targetPavlokId)');
+    print('[Discovery] Searched ${services.length} services, but none matched');
+    return null;
+  }
+
+  /// キャラクタリスティックを完全UUIDで検索（Pavlok ID一致ベースのフォールバック）
+  BluetoothCharacteristic? _findCharacteristicByUuid(
+    List<BluetoothCharacteristic> characteristics,
+    String targetUuid,
+  ) {
+    final targetPavlokId = _extractPavlokId(targetUuid);
+    
+    for (final chr in characteristics) {
+      final chrUuid = chr.uuid.toString();
+      final chrPavlokId = _extractPavlokId(chrUuid);
+      
+      // 方法1: 完全UUIDマッチング（優先）
+      if (_uuidMatches(chrUuid, targetUuid)) {
+        print('[Discovery] ✅ Characteristic matched (exact UUID): $chrUuid (Pavlok ID: $chrPavlokId)');
+        return chr;
+      }
+      
+      // 方法2: Pavlok ID一致（フォールバック）- 誤マッチを防ぐためcontains()は使わない
+      if (chrPavlokId == targetPavlokId) {
+        print('[Discovery] ✅ Characteristic matched (Pavlok ID match): $chrUuid (ID: $chrPavlokId)');
+        return chr;
+      }
+    }
+    return null;
+  }
+
+  /// キャラクタリスティックを検索（UUID末尾4桁ベース）- 後方互換性のため残す
+  BluetoothCharacteristic? _findCharacteristicById(
+    List<BluetoothCharacteristic> characteristics,
+    String targetId,
+  ) {
+    for (final chr in characteristics) {
+      final shortId = _extractCharacteristicId(chr.uuid.toString());
+      if (shortId == targetId.toLowerCase()) {
+        return chr;
+      }
+    }
+    return null;
+  }
+
+  /// UUIDの末尾4桁を取得します（後方互換性のため残す）
+  /// 
+  /// [uuid] Guidまたは文字列
+  /// Returns: 末尾4桁（例: "7001"）
+  String _getLast4Digits(dynamic uuid) {
+    final uuidStr = uuid.toString().toUpperCase();
+    // UUID形式から末尾4桁を抽出（例: "00007001-0000-1000-8000-00805f9b34fb" → "7001"）
+    final parts = uuidStr.split('-');
+    if (parts.isNotEmpty) {
+      final firstPart = parts[0];
+      if (firstPart.length >= 4) {
+        return firstPart.substring(firstPart.length - 4);
+      }
+    }
+    return '';
+  }
+
+  /// 末尾4桁ベースでキャラクタリスティックを検索します
+  /// 
+  /// [services] サービスリスト
+  /// [last4Digits] 末尾4桁（例: "7001"）
+  /// Returns: 見つかったキャラクタリスティック、見つからない場合はnull
+  BluetoothCharacteristic? _findCharacteristicByLast4Digits(
+    List<BluetoothService> services,
+    String last4Digits,
+  ) {
+    for (final service in services) {
+      for (final characteristic in service.characteristics) {
+        final charLast4 = _getLast4Digits(characteristic.uuid);
+        if (charLast4 == last4Digits) {
+          if (characteristic.properties.write ||
+              characteristic.properties.writeWithoutResponse) {
+            print('[PavlokBleService] ✅ キャラクタリスティック${last4Digits}を発見: ${characteristic.uuid}');
+            return characteristic;
+          }
+        }
+      }
+    }
+    print('[PavlokBleService] ⚠️ キャラクタリスティック${last4Digits}が見つかりませんでした');
+    return null;
+  }
+
+  /// 指定されたサービス内で書き込み可能なキャラクタリスティックを検索します（後方互換性のため残す）
+  BluetoothCharacteristic? _findWritableCharacteristicInService(
+    BluetoothService service,
+  ) {
     for (final characteristic in service.characteristics) {
       if (characteristic.properties.write ||
           characteristic.properties.writeWithoutResponse) {

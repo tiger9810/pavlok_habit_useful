@@ -136,7 +136,7 @@ class PavlokNotifier extends _$PavlokNotifier {
       
       await bleService.connect(
         device,
-        timeout: const Duration(seconds: 15),
+        timeout: const Duration(seconds: 10),
         onBatteryLevelUpdate: (batteryLevel) {
           print('[PavlokProvider] バッテリーレベル更新を受信: $batteryLevel%');
           // バッテリーレベルが更新されたら状態を更新

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:useful_pavlok/data/services/pavlok_ble_service.dart';
 import 'package:useful_pavlok/presentation/pages/device_button_settings_screen.dart';
 import 'package:useful_pavlok/presentation/pages/workflow_settings_screen.dart';
 import 'package:useful_pavlok/presentation/providers/pavlok_provider.dart';
@@ -114,9 +113,7 @@ class PavlokSettingsScreen extends ConsumerWidget {
                 if (!pavlokState.isConnected) ...[
                   _buildDeviceSelectionView(context, theme, pavlokState, ref),
                 ] else ...[
-                  // 接続済み時: スニッフィングされたデータ送信ボタン、クイックリモート・カードと設定メニュー
-                  _buildSniffedDataButton(context, theme),
-                  const SizedBox(height: 16),
+                  // 接続済み時: クイックリモート・カードと設定メニュー
                   _buildQuickRemoteCard(context, theme, pavlokState, ref),
                   const SizedBox(height: 24),
                   _buildSettingsMenuList(context, theme),
@@ -171,7 +168,7 @@ class PavlokSettingsScreen extends ConsumerWidget {
         // 「空でなければ出す」ロジック: discoveredDevices.isNotEmpty の場合に即座に表示
         if (discoveredDevices.isNotEmpty) ...[
           Text(
-            '見つかったPavlokデバイス',
+            '見つかったBluetoothデバイス',
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.bold,
             ),
@@ -270,16 +267,21 @@ class PavlokSettingsScreen extends ConsumerWidget {
     BluetoothDevice device,
     WidgetRef ref,
   ) {
-    // 公式アプリ風の表示名に変換
-    // Service UUIDが一致するデバイスは一律「Pavlok 3」と表示
-    const deviceDisplayName = 'Pavlok 3';
+    // デバイス名を取得（名前が取得できない場合は「名前なし」）
+    final deviceName = device.platformName.isNotEmpty
+        ? device.platformName
+        : '名前なし';
     
-    // デバイスIDの冒頭4文字を抽出して「PAVLOK-3-[ID]」形式で表示
+    // デバイスIDの冒頭4文字を抽出
     final deviceId = device.remoteId.toString();
     final deviceIdPrefix = deviceId.length >= 4 
         ? deviceId.substring(0, 4).toUpperCase()
         : deviceId.toUpperCase();
-    final deviceAlias = 'PAVLOK-3-$deviceIdPrefix';
+    
+    // 表示名とエイリアスを決定
+    // Service UUIDによる判定は接続時に実施されるため、ここでは全てのデバイスを表示
+    final deviceDisplayName = deviceName;
+    final deviceAlias = deviceIdPrefix;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -401,100 +403,6 @@ class PavlokSettingsScreen extends ConsumerWidget {
 
 
   /// クイックリモート・カードを構築します
-  /// スニッフィングされたデータを送信するボタンを構築します
-  Widget _buildSniffedDataButton(
-    BuildContext context,
-    ThemeData theme,
-  ) {
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [
-            Color(0xFFFF6B6B), // 赤
-            Color(0xFFFF8E53), // オレンジ
-            Color(0xFFFFD93D), // 黄色
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFFF6B6B).withOpacity(0.4),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: ElevatedButton(
-        onPressed: () async {
-          print('[PavlokSettingsScreen] ACTIVATE PAVLOK (Sniffed) ボタンが押されました');
-          try {
-            final bleService = PavlokBleService();
-            await bleService.sendSniffedVibrateData();
-            print('[PavlokSettingsScreen] Sending Sniffed Data: ${PavlokBleService.sniffedVibrateHex} to ${PavlokBleService.targetCharacteristicUuid}');
-            
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text(
-                    '✅ スニッフィングされたデータを送信しました',
-                    style: TextStyle(color: Colors.white),
-                  ),
-                  backgroundColor: Colors.green,
-                  duration: const Duration(seconds: 2),
-                ),
-              );
-            }
-          } catch (e) {
-            print('[PavlokSettingsScreen] ❌ エラー: $e');
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    '❌ エラー: $e',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  backgroundColor: Colors.red,
-                  duration: const Duration(seconds: 3),
-                ),
-              );
-            }
-          }
-        },
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.transparent,
-          shadowColor: Colors.transparent,
-          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(
-              Icons.flash_on,
-              color: Colors.white,
-              size: 28,
-            ),
-            const SizedBox(width: 12),
-            const Text(
-              'ACTIVATE PAVLOK (Sniffed)',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildQuickRemoteCard(
     BuildContext context,
     ThemeData theme,
@@ -609,6 +517,7 @@ class PavlokSettingsScreen extends ConsumerWidget {
           state.shockIntensity,
           const Color(0xFFFF6B35), // オレンジ（通常時と同じ）
           (value) => notifier.updateShockIntensity(value),
+          ref,
         ),
         _buildExpandedActionRow(
           context,
@@ -618,6 +527,7 @@ class PavlokSettingsScreen extends ConsumerWidget {
           state.alarmIntensity,
           const Color(0xFFFFD700), // 黄色（通常時と同じ）
           (value) => notifier.updateAlarmIntensity(value),
+          ref,
         ),
         _buildExpandedActionRow(
           context,
@@ -627,27 +537,7 @@ class PavlokSettingsScreen extends ConsumerWidget {
           state.vibrateIntensity,
           const Color(0xFFE91E63), // ピンク（通常時と同じ）
           (value) => notifier.updateVibrateIntensity(value),
-        ),
-        const SizedBox(height: 16),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: () => notifier.saveToDevice(),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.primaryColor,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppTheme.borderRadius),
-              ),
-            ),
-            child: Text(
-              'デバイスに保存',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: Colors.white,
-              ),
-            ),
-          ),
+          ref,
         ),
       ],
     );
@@ -711,15 +601,38 @@ class PavlokSettingsScreen extends ConsumerWidget {
     int intensity,
     Color iconColor,
     ValueChanged<int> onChanged,
+    WidgetRef ref,
   ) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
         children: [
-          Icon(
-            icon,
-            color: iconColor,
-            size: 24,
+          // アイコンをボタン化してタップ可能にする
+          IconButton(
+            icon: Icon(
+              icon,
+              color: iconColor,
+              size: 24,
+            ),
+            onPressed: () {
+              // 現在の強度で即座にコマンドを実行
+              // スライダーで調整した強度は既に状態に反映されているため、
+              // 引数なしで呼び出すと現在の状態の強度が使用される
+              final notifier = ref.read(pavlokNotifierProvider.notifier);
+              switch (label) {
+                case 'ザップ':
+                  notifier.triggerShock();
+                  break;
+                case 'アラーム音':
+                  notifier.triggerAlarm();
+                  break;
+                case 'バイブ':
+                  notifier.triggerVibrate();
+                  break;
+              }
+            },
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
           ),
           const SizedBox(width: 12),
           Expanded(
