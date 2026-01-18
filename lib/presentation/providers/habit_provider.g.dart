@@ -193,7 +193,7 @@ final totalPointsProvider = AutoDisposeFutureProvider<int>.internal(
 @Deprecated('Will be removed in 3.0. Use Ref instead')
 // ignore: unused_element
 typedef TotalPointsRef = AutoDisposeFutureProviderRef<int>;
-String _$habitNotifierHash() => r'e15281803bbb4dc43c02c23fefafc23090dbddda';
+String _$habitNotifierHash() => r'237e114878fd2858c3212e08e4885eaee3c0863e';
 
 /// 習慣リストを管理するプロバイダー
 ///

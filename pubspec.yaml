@@ -45,6 +45,12 @@ dependencies:
   
   # カレンダー表示
   table_calendar: ^3.1.2
+  
+  # Bluetooth通信
+  flutter_blue_plus: ^1.33.4
+  
+  # 権限管理
+  permission_handler: ^11.3.1
 
 dev_dependencies:
   flutter_test:

@@ -356,7 +356,7 @@ class _HabitFormScreenState extends ConsumerState<HabitFormScreen> {
                           _buildSection(
                             label: '目標タイプ',
                             child: DropdownButtonFormField<String>(
-                              value: _targetType,
+                              initialValue: _targetType,
                               decoration: const InputDecoration(),
                               items: const [
                                 DropdownMenuItem(
@@ -386,7 +386,7 @@ class _HabitFormScreenState extends ConsumerState<HabitFormScreen> {
               _buildSection(
                 label: '頻度',
                 child: DropdownButtonFormField<String>(
-                  value: _frequency,
+                  initialValue: _frequency,
                   decoration: const InputDecoration(),
                   items: const [
                     DropdownMenuItem(
@@ -521,7 +521,7 @@ class _HabitFormScreenState extends ConsumerState<HabitFormScreen> {
                 _buildSection(
                   label: '罰のアクション',
                   child: DropdownButtonFormField<String>(
-                    value: _stoicAction,
+                    initialValue: _stoicAction,
                     decoration: const InputDecoration(),
                     items: const [
                       DropdownMenuItem(

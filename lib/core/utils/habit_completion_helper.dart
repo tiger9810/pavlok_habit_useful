@@ -9,12 +9,30 @@ class HabitCompletionHelper {
   /// [date] 確認する日付
   /// Returns 達成状況（null: 未記録、true: 達成、false: 失敗）
   static bool? getCompletionStatus(Habit habit, DateTime date) {
+    final dateKey = app_date_utils.AppDateUtils.dateKey(date);
+    
+    // 数値型習慣の場合、dailyValuesを確認
+    if (habit.isNumeric && habit.dailyValues.isNotEmpty) {
+      final value = habit.dailyValues[dateKey];
+      if (value != null && value > 0) {
+        // 目標値がある場合は、目標達成かどうかで判定
+        if (habit.target != null) {
+          final isTargetMet = habit.targetType == 'atLeast'
+              ? value >= habit.target!
+              : value <= habit.target!;
+          return isTargetMet;
+        }
+        // 目標値がない場合は、値が0より大きければ達成
+        return true;
+      }
+    }
+    
+    // 非数値型習慣の場合、従来のロジックを使用
     if (habit.lastCompletedAt == null) {
       return null;
     }
     
     final lastCompleted = habit.lastCompletedAt!;
-    final dateKey = app_date_utils.AppDateUtils.dateKey(date);
     final lastCompletedKey = app_date_utils.AppDateUtils.dateKey(lastCompleted);
     
     // 今日達成済みかどうか

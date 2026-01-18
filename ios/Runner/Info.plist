@@ -45,5 +45,11 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Pavlokデバイスとの連携に使用します</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Pavlokデバイスとの連携に使用します</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Bluetoothデバイスの検出に必要です</string>
 </dict>
 </plist>

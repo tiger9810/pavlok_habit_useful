@@ -1,4 +1,3 @@
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:useful_pavlok/core/utils/date_utils.dart' as app_date_utils;
 import 'package:useful_pavlok/domain/entities/habit.dart';
@@ -61,11 +60,18 @@ class HabitNotifier extends _$HabitNotifier {
   /// [habitId] 達成する習慣のID
   /// [completedAt] 達成日時（デフォルト: DateTime.now()）
   Future<void> completeHabit(String habitId, [DateTime? completedAt]) async {
-    state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
       final currentHabits = state.value ?? [];
-      final habit = currentHabits.firstWhere((h) => h.id == habitId);
-      final updatedHabit = habit.markAsCompleted(completedAt);
+      final habit = currentHabits.firstWhere(
+        (h) => h.id == habitId,
+        orElse: () => throw StateError('Habit not found: $habitId'),
+      );
+      
+      // dailyValuesを保持してから達成としてマーク
+      final updatedHabit = habit.copyWith(
+        dailyValues: Map<String, double>.from(habit.dailyValues),
+      ).markAsCompleted(completedAt);
+      
       // TODO: リポジトリに保存
       // await ref.read(habitRepositoryProvider).updateHabit(updatedHabit);
       return currentHabits.map((h) => h.id == habitId ? updatedHabit : h).toList();
@@ -77,11 +83,18 @@ class HabitNotifier extends _$HabitNotifier {
   /// [habitId] 未達成とする習慣のID
   /// [checkedAt] チェック日時（デフォルト: DateTime.now()）
   Future<void> incompleteHabit(String habitId, [DateTime? checkedAt]) async {
-    state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
       final currentHabits = state.value ?? [];
-      final habit = currentHabits.firstWhere((h) => h.id == habitId);
-      final updatedHabit = habit.markAsIncomplete(checkedAt);
+      final habit = currentHabits.firstWhere(
+        (h) => h.id == habitId,
+        orElse: () => throw StateError('Habit not found: $habitId'),
+      );
+      
+      // dailyValuesを保持してから未達成としてマーク
+      final updatedHabit = habit.copyWith(
+        dailyValues: Map<String, double>.from(habit.dailyValues),
+      ).markAsIncomplete(checkedAt);
+      
       // TODO: リポジトリに保存
       // await ref.read(habitRepositoryProvider).updateHabit(updatedHabit);
       return currentHabits.map((h) => h.id == habitId ? updatedHabit : h).toList();
@@ -92,11 +105,18 @@ class HabitNotifier extends _$HabitNotifier {
   /// 
   /// [habitId] 無効化する習慣のID
   Future<void> deactivateHabit(String habitId) async {
-    state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
       final currentHabits = state.value ?? [];
-      final habit = currentHabits.firstWhere((h) => h.id == habitId);
-      final updatedHabit = habit.deactivate();
+      final habit = currentHabits.firstWhere(
+        (h) => h.id == habitId,
+        orElse: () => throw StateError('Habit not found: $habitId'),
+      );
+      
+      // dailyValuesを保持してから無効化
+      final updatedHabit = habit.copyWith(
+        dailyValues: Map<String, double>.from(habit.dailyValues),
+      ).deactivate();
+      
       // TODO: リポジトリに保存
       // await ref.read(habitRepositoryProvider).updateHabit(updatedHabit);
       return currentHabits.map((h) => h.id == habitId ? updatedHabit : h).toList();
@@ -107,11 +127,18 @@ class HabitNotifier extends _$HabitNotifier {
   /// 
   /// [habitId] 再有効化する習慣のID
   Future<void> activateHabit(String habitId) async {
-    state = const AsyncValue.loading();
     state = await AsyncValue.guard(() async {
       final currentHabits = state.value ?? [];
-      final habit = currentHabits.firstWhere((h) => h.id == habitId);
-      final updatedHabit = habit.activate();
+      final habit = currentHabits.firstWhere(
+        (h) => h.id == habitId,
+        orElse: () => throw StateError('Habit not found: $habitId'),
+      );
+      
+      // dailyValuesを保持してから再有効化
+      final updatedHabit = habit.copyWith(
+        dailyValues: Map<String, double>.from(habit.dailyValues),
+      ).activate();
+      
       // TODO: リポジトリに保存
       // await ref.read(habitRepositoryProvider).updateHabit(updatedHabit);
       return currentHabits.map((h) => h.id == habitId ? updatedHabit : h).toList();
@@ -136,7 +163,10 @@ class HabitNotifier extends _$HabitNotifier {
   Future<void> updateDailyValue(String habitId, DateTime date, double value) async {
     state = await AsyncValue.guard(() async {
       final currentHabits = state.value ?? [];
-      final habit = currentHabits.firstWhere((h) => h.id == habitId);
+      final habit = currentHabits.firstWhere(
+        (h) => h.id == habitId,
+        orElse: () => throw StateError('Habit not found: $habitId'),
+      );
       
       // 日付キーを取得
       final dateKey = app_date_utils.AppDateUtils.dateKey(date);
