@@ -127,9 +127,82 @@ class PavlokBleService {
       final Set<String> seenDeviceIds = {};
       final targetServiceUuid = Guid(pavlokServiceUuid);
 
-      print('[PavlokBleService] 全てのBluetoothデバイスをスキャンします');
+      // スキャン開始前に必ず停止（Mac特有の「消えるデバイス」対策）
+      print('[PavlokBleService] 既存のスキャンを停止中...');
+      await FlutterBluePlus.stopScan();
+      
+      // リストをクリア
+      seenDeviceIds.clear();
+      allDevices.clear();
 
-      // スキャン開始（全てのデバイスをスキャン）
+      // Mac特有の「消えるデバイス」対策: 接続済みデバイスをチェック
+      print('[PavlokBleService] 接続済みデバイスをチェック中...');
+      try {
+        final connectedDevices = await FlutterBluePlus.connectedDevices;
+        print('[PavlokBleService] 接続済みデバイス数: ${connectedDevices.length}');
+        
+        for (final device in connectedDevices) {
+          try {
+            // サービス探索を実行してPavlokかどうか確認（タイムアウトを短く設定）
+            final services = await device.discoverServices(timeout: 2);
+            final hasPavlokService = services.any((service) => 
+              service.uuid.toString().toLowerCase() == pavlokServiceUuid.toLowerCase()
+            );
+            
+            if (hasPavlokService) {
+              final deviceId = device.remoteId.toString();
+              if (!seenDeviceIds.contains(deviceId)) {
+                // 接続済みデバイスからScanResultを作成
+                // 接続済みデバイスの場合、実際のAdvertisementDataは取得できないため、
+                // 最小限の情報で構築します（サービス探索で既にPavlokであることが確認済み）
+                try {
+                  // 接続済みデバイスからScanResultを作成
+                  // Note: 実際のAdvertisementDataは取得できないため、最小限の情報で構築
+                  final now = DateTime.now();
+                  final scanResult = ScanResult(
+                    device: device,
+                    advertisementData: AdvertisementData(
+                      advName: device.platformName.isNotEmpty ? device.platformName : 'Pavlok 3',
+                      appearance: 0,
+                      serviceUuids: [targetServiceUuid],
+                      manufacturerData: {},
+                      serviceData: {},
+                      txPowerLevel: null,
+                      connectable: true,
+                    ),
+                    rssi: 0,
+                    timeStamp: now,
+                  );
+                  allDevices.add(scanResult);
+                  seenDeviceIds.add(deviceId);
+                  
+                  final deviceName = device.platformName.isNotEmpty
+                      ? device.platformName
+                      : '名前なし';
+                  final deviceIdPrefix = deviceId.length >= 4 
+                      ? deviceId.substring(0, 4).toUpperCase()
+                      : deviceId.toUpperCase();
+                  print('[PavlokBleService] ✅ 接続済みPavlok 3 を発見: $deviceName (PAVLOK-3-$deviceIdPrefix)');
+                  print('[PavlokBleService]   判定理由: 接続済みデバイスのService UUID一致');
+                } catch (e) {
+                  // ScanResult作成エラー時はスキップ（AdvertisementDataのコンストラクタエラー等）
+                  print('[PavlokBleService] 接続済みデバイスのScanResult作成エラー（スキップ）: $e');
+                }
+              }
+            }
+          } catch (e) {
+            // サービス探索エラー時はスキップ（タイムアウト等）
+            print('[PavlokBleService] 接続済みデバイスのサービス探索エラー（スキップ）: $e');
+          }
+        }
+      } catch (e) {
+        print('[PavlokBleService] 接続済みデバイスの取得エラー（続行）: $e');
+      }
+
+      print('[PavlokBleService] Pavlok 3 デバイスをスキャンします（アプリ側フィルタリング）');
+
+      // スキャン開始（すべてのデバイスをスキャンし、アプリ側でフィルタリング）
+      // withServicesを削除することで、Service UUIDをアドバタイズしていないデバイスも検出可能
       await FlutterBluePlus.startScan(
         timeout: timeout,
       );
@@ -147,49 +220,69 @@ class PavlokBleService {
             if (seenDeviceIds.contains(deviceId)) {
               continue;
             }
-            seenDeviceIds.add(deviceId);
 
-            // 全てのデバイスをリストに追加（Service UUIDによるフィルタリングはOSレベルで実施済み）
-            allDevices.add(scanResult);
-            
-            // デバイス情報をログ出力
-            final deviceName = scanResult.device.platformName.isNotEmpty
-                ? scanResult.device.platformName
-                : '名前なし';
-            final localName = scanResult.advertisementData.localName;
+            // デバイス情報を取得
+            final deviceName = scanResult.device.platformName;
             final deviceIdStr = scanResult.device.remoteId.toString();
             final deviceIdPrefix = deviceIdStr.length >= 4 
                 ? deviceIdStr.substring(0, 4).toUpperCase()
                 : deviceIdStr.toUpperCase();
             
-            // Pavlok 3かどうかを判定（Service UUIDまたはデバイス名で判定）
+            // 検出されたBluetoothデバイスの詳細情報をログ出力
+            final displayName = deviceName.isNotEmpty ? deviceName : '名前なし';
+            final localName = scanResult.advertisementData.localName;
+            final serviceUuids = scanResult.advertisementData.serviceUuids.map((u) => u.toString()).toList();
+            final rssi = scanResult.rssi;
+            final connectable = scanResult.advertisementData.connectable;
+            
+            print('[PavlokBleService] 📱 検出されたBluetoothデバイス:');
+            print('[PavlokBleService]   - デバイス名: $displayName');
+            if (localName.isNotEmpty && localName != displayName) {
+              print('[PavlokBleService]   - ローカル名: $localName');
+            }
+            print('[PavlokBleService]   - デバイスID: $deviceId ($deviceIdPrefix)');
+            print('[PavlokBleService]   - RSSI: $rssi dBm');
+            print('[PavlokBleService]   - 接続可能: $connectable');
+            print('[PavlokBleService]   - サービスUUID数: ${serviceUuids.length}');
+            if (serviceUuids.isNotEmpty) {
+              print('[PavlokBleService]   - サービスUUID一覧:');
+              for (final uuid in serviceUuids) {
+                print('[PavlokBleService]     * $uuid');
+              }
+            } else {
+              print('[PavlokBleService]   - サービスUUID: なし');
+            }
+            print('[PavlokBleService]   - 製造者データ: ${scanResult.advertisementData.manufacturerData}');
+            print('[PavlokBleService]   - サービスデータ: ${scanResult.advertisementData.serviceData}');
+            
+            // 厳格なフィルタリング条件: 名前条件またはUUID条件のいずれかを満たす場合のみ追加
+            // 名前条件: platformNameに"Pavlok-3"が含まれる
+            final hasPavlokInName = deviceName.toLowerCase().contains('pavlok-3');
+            
+            // UUID条件: serviceUuidsにMain Control Service UUIDが含まれる
             final hasPavlokService = scanResult.advertisementData.serviceUuids
-                .any((uuid) => uuid == targetServiceUuid);
+                .any((uuid) => uuid.toString().toLowerCase() == pavlokServiceUuid.toLowerCase());
             
-            // デバイス名に"Pavlok"が含まれているかチェック（大文字小文字を区別しない）
-            final hasPavlokInName = deviceName.toLowerCase().contains('pavlok') ||
-                (localName.isNotEmpty && localName.toLowerCase().contains('pavlok'));
-            
-            final isPavlokDevice = hasPavlokService || hasPavlokInName;
-            
-            if (isPavlokDevice) {
-              print('[PavlokBleService] ✅ Pavlok 3 を発見: $deviceName (PAVLOK-3-$deviceIdPrefix)');
+            // 条件に合致する場合のみ追加
+            if (hasPavlokInName || hasPavlokService) {
+              seenDeviceIds.add(deviceId);
+              allDevices.add(scanResult);
+              
+              // Pavlokとして認定されたデバイスのみ詳細ログを出力
+              print('[PavlokBleService] ✅ Pavlok 3 として認定: $displayName (PAVLOK-3-$deviceIdPrefix)');
               if (hasPavlokService) {
                 print('[PavlokBleService]   判定理由: Service UUID一致');
               } else if (hasPavlokInName) {
-                print('[PavlokBleService]   判定理由: デバイス名に"Pavlok"が含まれています');
+                print('[PavlokBleService]   判定理由: デバイス名に"Pavlok-3"が含まれています');
               }
               developer.log(
-                'Pavlok 3 デバイス発見: $deviceName (PAVLOK-3-$deviceIdPrefix, ${scanResult.device.remoteId})',
+                'Pavlok 3 デバイス発見: $displayName (PAVLOK-3-$deviceIdPrefix, ${scanResult.device.remoteId})',
                 name: 'PavlokBleService',
               );
             } else {
-              print('[PavlokBleService] 📱 その他のデバイス: $deviceName ($deviceIdPrefix)');
-              developer.log(
-                'その他のデバイス発見: $deviceName ($deviceIdPrefix, ${scanResult.device.remoteId})',
-                name: 'PavlokBleService',
-              );
+              print('[PavlokBleService] ❌ Pavlok 3 の条件に合致しません（リストに追加しません）');
             }
+            print('[PavlokBleService] ---');
           }
         }
       } on TimeoutException {
